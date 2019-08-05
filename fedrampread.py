@@ -2,9 +2,10 @@
 This small utility parses all the FedRAMP moderate controls and displays the
 compliance as code content rules that apply to those controls.
 """
-
+import argparse
 import os
 import logging
+import sys
 import tempfile
 
 import git
@@ -43,7 +44,7 @@ def get_fedramp_moderate_controls(fedramp_path):
     # we skip it. The rest should be the actual list of controls.
     return df1['Unnamed: 3'][1:]
 
-def print_files_for_controls(fedramp_controls, content_path):
+def print_files_for_controls(fedramp_controls, content_path, output_file):
     """ Print the relevant files from the ComplianceAsCode project that are
     relevant to the NIST controls """
     for control in fedramp_controls:
@@ -53,17 +54,27 @@ def print_files_for_controls(fedramp_controls, content_path):
         stdout = os.popen(command)
         output = stdout.read()
         if output:
-            print("The control '%s' is mentioned in the following rules:\n" %
-                  control)
-            print(output)
+            output_file.write("The control '%s' is mentioned in the following "
+                              "rules:\n\n" % control)
+            output_file.write(output)
+            output_file.write("\n")
 
 def main():
     """ read the fedramp controls! """
+    parser = argparse.ArgumentParser(
+        description='Print the FedRAMP moderate controls and their respective '
+                    'content files.')
+    parser.add_argument('file',
+                        nargs='?',
+                        default=sys.stdout,
+                        type=argparse.FileType('w'),
+                        help='The file to output the result to.')
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory() as workspace:
         fedramp_path = get_fedramp_sheet(workspace)
         fedramp_controls = get_fedramp_moderate_controls(fedramp_path)
         content_path = get_compliance_content(workspace)
-        print_files_for_controls(fedramp_controls, content_path)
+        print_files_for_controls(fedramp_controls, content_path, args.file)
 
 if __name__ == '__main__':
     # logging.basicConfig(level=logging.INFO)
