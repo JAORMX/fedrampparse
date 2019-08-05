@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 This small utility parses all the FedRAMP controls and displays the
 compliance as code content rules that apply to those controls.
