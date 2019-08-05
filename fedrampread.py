@@ -1,5 +1,5 @@
 """
-This small utility parses all the FedRAMP moderate controls and displays the
+This small utility parses all the FedRAMP controls and displays the
 compliance as code content rules that apply to those controls.
 """
 import argparse
@@ -35,10 +35,11 @@ def get_compliance_content(workspace):
     git.Repo.clone_from(COMPLIANCE_CONTENT_REPO, content_path, branch='master')
     return content_path
 
-def get_fedramp_moderate_controls(fedramp_path):
-    """ Get a list of controls that apply to FedRAMP moderate """
+def get_fedramp_controls(fedramp_path, baseline):
+    """ Get a list of controls that apply to FedRAMP according to the given
+    baseline."""
     xlfile = pd.ExcelFile(fedramp_path)
-    df1 = xlfile.parse('Moderate Baseline Controls')
+    df1 = xlfile.parse('%s Baseline Controls' % baseline.capitalize())
     # The first line doesn't contain the right titles... e.g. "Unnamed: 3"
     # after getting the title, the next line contains the actual titles... so
     # we skip it. The rest should be the actual list of controls.
@@ -62,17 +63,21 @@ def print_files_for_controls(fedramp_controls, content_path, output_file):
 def main():
     """ read the fedramp controls! """
     parser = argparse.ArgumentParser(
-        description='Print the FedRAMP moderate controls and their respective '
+        description='Print the FedRAMP controls and their respective '
                     'content files.')
     parser.add_argument('file',
                         nargs='?',
                         default=sys.stdout,
                         type=argparse.FileType('w'),
                         help='The file to output the result to.')
+    parser.add_argument('--baseline',
+                        default='moderate',
+                        choices=['low', 'moderate', 'high'],
+                        help='The baseline to output the results for.')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as workspace:
         fedramp_path = get_fedramp_sheet(workspace)
-        fedramp_controls = get_fedramp_moderate_controls(fedramp_path)
+        fedramp_controls = get_fedramp_controls(fedramp_path, args.baseline)
         content_path = get_compliance_content(workspace)
         print_files_for_controls(fedramp_controls, content_path, args.file)
 
