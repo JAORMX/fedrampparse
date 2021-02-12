@@ -19,6 +19,7 @@ import yaml
 
 FEDRAMP_SHEET = 'https://www.fedramp.gov/assets/resources/documents/FedRAMP_Security_Controls_Baseline.xlsx'
 COMPLIANCE_CONTENT_REPO = 'https://github.com/ComplianceAsCode/content.git'
+OPENCONTROL_REPO = 'https://github.com/ComplianceAsCode/redhat.git'
 
 logging.basicConfig(level=logging.INFO)
 subsectionsre = re.compile(".*([a-z])")
@@ -59,6 +60,18 @@ def get_compliance_content(workspace):
     return content_path
 
 
+def get_opencontrol_content(workspace):
+    """ Clone the opencontrol content repository """
+    logging.info("Fetching opencontrol repository: %s", OPENCONTROL_REPO)
+    oc_path = os.path.join(workspace, 'opencontrol')
+    try:
+        os.stat(oc_path)
+    except FileNotFoundError:
+        os.mkdir(oc_path)
+        git.Repo.clone_from(OPENCONTROL_REPO, oc_path, branch='master')
+    return oc_path
+
+
 def normalize_control(control):
     control = control.replace(" ", "")
     if control.endswith(")"):
@@ -78,6 +91,47 @@ def get_fedramp_controls(fedramp_path, baseline):
     controls = set(map(normalize_control, df1['Unnamed: 3'][1:]))
     logging.info("We'll check against %s FedRAMP controls", len(controls))
     return controls
+
+
+def iterate_components(proddir):
+    components = sh.find(proddir, "-name", "component.yaml").rstrip().split("\n")
+    for comppath in components:
+        with open(comppath) as comp:
+            yield yaml.safe_load(comp)
+
+
+def filter_fedramp_controls(product, controls, opencontrol_path):
+    # Maps the CaC names to opencontrol names
+    product_mapping = {
+        "rhcos4": "coreos-4",
+        "ocp4": "openshift-container-platform-4",
+        "rhel7": "rhel-7",
+        "rhel8": "rhel-8",
+    }
+    if not product_mapping.get(product, False):
+        return controls
+
+    logging.info("Filtering FedRAMP controls based on the opencontrol assessment")
+
+    assessed_controls = set()
+    unapplicable_controls = set()
+    proddir = os.path.join(opencontrol_path, product_mapping[product], "policies")
+    for component in iterate_components(proddir):
+        for control in component:
+            assessed_controls.add(normalize_control(control["control_key"]))
+
+            if control["implementation_status"] == "not applicable":
+                unapplicable_controls.add(normalize_control(control["control_key"]))
+
+    unassessed_controls = controls.difference(assessed_controls)
+    if len(unassessed_controls) > 1:
+        logging.info("There are %s controls that appear in the baseline but were not assessed:\n\t%s",
+                    len(assessed_controls), ", ".join(unassessed_controls))
+    else:
+        logging.info("All FedRAMP controls were assessed in OpenControl")
+
+    # Return applicable controls coming from the baseline itself
+    return controls.difference(unapplicable_controls)
 
 
 def print_files_for_controls(fedramp_controls, content_path, output_file):
@@ -162,7 +216,6 @@ def get_applicable_references(selection, pname):
     return output
 
 
-
 def print_stats(product_info, fedramp_controls, content_path, output_file):
     """ Print the relevant statistics on how the controls are covered for a certain
     product """
@@ -184,7 +237,7 @@ def print_stats(product_info, fedramp_controls, content_path, output_file):
     print("Addressed controls: %s/%s\n\t%s\n" % (len(addressed), total, ', '.join(addressed)))
 
     diff = addressed_controls.difference(fedramp_controls)
-    print("Unapplicable controls: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
+    print("Controls addressed, not applicable to this baseline: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
 
     unaddressed = fedramp_controls.difference(addressed)
     print("Unaddressed controls: %s/%s\n\t%s\n" % (len(unaddressed), total, ', '.join(unaddressed)))
@@ -213,8 +266,10 @@ def main():
     fedramp_path = get_fedramp_sheet(workspace)
     fedramp_controls = get_fedramp_controls(fedramp_path, args.baseline)
     content_path = get_compliance_content(workspace)
+    oc_path = get_opencontrol_content(workspace)
     #print_files_for_controls(fedramp_controls, content_path, args.file)
     product_info = get_product_info(args.product, content_path)
+    fedramp_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
     print_stats(product_info, fedramp_controls, content_path, args.file)
 
 if __name__ == '__main__':
