@@ -7,22 +7,119 @@ import argparse
 import os
 import logging
 import re
+import subprocess
 import sys
-import tempfile
 
 import git
 import pandas as pd
 import requests
 import sh
 import yaml
+from xml.etree import ElementTree
 
 
 FEDRAMP_SHEET = 'https://www.fedramp.gov/assets/resources/documents/FedRAMP_Security_Controls_Baseline.xlsx'
 COMPLIANCE_CONTENT_REPO = 'https://github.com/ComplianceAsCode/content.git'
 OPENCONTROL_REPO = 'https://github.com/ComplianceAsCode/redhat.git'
 
+XCCDF12_NS = "http://checklists.nist.gov/xccdf/1.2"
+OVAL_NS = "http://oval.mitre.org/XMLSchema/oval-definitions-5"
+IGNITION_SYSTEM = "urn:xccdf:fix:script:ignition"
+KUBERNETES_SYSTEM = "urn:xccdf:fix:script:kubernetes"
+OCIL_SYSTEM = "http://scap.nist.gov/schema/ocil/2"
+NIST_800_53_REFERENCE = "http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r4.pdf"
+
+XCCDF_RULE_PREFIX = "xccdf_org.ssgproject.content_rule_"
+XCCDF_PROFILE_PREFIX = "xccdf_org.ssgproject.content_profile_"
+
 logging.basicConfig(level=logging.INFO)
 subsectionsre = re.compile(".*([a-z])")
+
+def removeprefix(fullstr, prefix):
+    if fullstr.startswith(prefix):
+        return fullstr[len(prefix):]
+    else:
+        return fullstr
+
+class XCCDFBenchmark:
+    def __init__(self, filepath):
+        self.tree = None
+        with open(filepath, 'r') as xccdf_file:
+            file_string = xccdf_file.read()
+            tree = ElementTree.fromstring(file_string)
+            self.tree = tree
+
+        self.indexed_rules = {}
+        for rule in self.tree.findall(".//{%s}Rule" % (XCCDF12_NS)):
+            rule_id = rule.get("id")
+            if rule_id is None:
+                raise ValueError("Can't index a rule with no id attribute!")
+
+            if rule_id in self.indexed_rules:
+                raise ValueError("Multiple rules exist with same id attribute: %s!" % rule_id)
+
+            self.indexed_rules[rule_id] = rule
+
+    def get_rules(self, baseline):
+        profile_name = XCCDF_PROFILE_PREFIX + baseline
+        xccdf_profile = self.tree.find(".//{%s}Profile[@id=\"%s\"]" %
+                                        (XCCDF12_NS, profile_name))
+        if xccdf_profile is None:
+            raise ValueError("No such profile: %s" % profile_name)
+
+        rules = []
+        selects = xccdf_profile.findall("./{%s}select[@selected=\"true\"]" %
+                                        XCCDF12_NS)
+        for select in selects:
+            rule_id = select.get('idref')
+            xccdf_rule = self.indexed_rules.get(rule_id)
+            if xccdf_rule is None:
+                # it could also be a Group
+                continue
+            rules.append(xccdf_rule)
+        return rules
+
+class RuleProperties:
+    def __init__(self, profile_name):
+        self.profile_name = profile_name
+
+        self.rule_id = None
+        self.name = None
+
+        self.has_fix = False
+        self.has_ocil = False
+        self.has_oval = False
+
+        self.nistrefs = list()
+
+    def __str__(self):
+        return "%s [OCIL %s, OVAL: %s, Fix: %s]" % (self.name, self.has_ocil, self.has_oval, self.has_fix)
+
+    def from_element(self, el):
+        self.rule_id = el.get("id")
+        self.name = removeprefix(self.rule_id, XCCDF_RULE_PREFIX)
+
+        oval = el.find("./{%s}check[@system=\"%s\"]" %
+                         (XCCDF12_NS, OVAL_NS))
+        ignition_fix = el.find("./{%s}fix[@system=\"%s\"]" %
+                                 (XCCDF12_NS, IGNITION_SYSTEM))
+        kubernetes_fix = el.find("./{%s}fix[@system=\"%s\"]" %
+                                   (XCCDF12_NS, KUBERNETES_SYSTEM))
+        ocil_check = el.find("./{%s}check[@system=\"%s\"]" %
+                               (XCCDF12_NS, OCIL_SYSTEM))
+        nistrefs_els = el.findall("./{%s}reference[@href=\"%s\"]" %
+                           (XCCDF12_NS, NIST_800_53_REFERENCE))
+
+        self.nistrefs = set([ normalize_control(ref.text) for ref in nistrefs_els ])
+
+        self.has_ocil = False if ocil_check is None else True
+        self.has_oval = False if oval is None else True
+
+        has_ignition_fix = False if ignition_fix is None else True
+        has_kubernetes_fix = False if kubernetes_fix is None else True
+        self.has_fix = has_ignition_fix or has_kubernetes_fix
+        return self
+
 
 def ensure_cachedir():
     directory = ".fedrampcachedir"
@@ -58,6 +155,25 @@ def get_compliance_content(workspace):
         os.mkdir(content_path)
         git.Repo.clone_from(COMPLIANCE_CONTENT_REPO, content_path, branch='master')
     return content_path
+
+def get_ds_path(cac_repo, product, do_rebuild):
+    ds_filename = "ssg-" + product + "-ds.xml"
+    ds_path = os.path.join(cac_repo, "build", ds_filename)
+    if do_rebuild:
+        build_xccdf_content(cac_repo, product)
+    else:
+        if not os.path.exists(ds_path):
+            raise IOError("DS %s not found and rebuild toggled off" % ds_path)
+        logging.info("Reusing cached built content for %s in repo %s" % (product, cac_repo))
+    
+    return ds_path
+
+
+def build_xccdf_content(cac_repo, product):
+    logging.info("Rebuilding product %s in repo %s" % (product, cac_repo))
+    buildscript_path = os.path.abspath(os.path.join(cac_repo, "build_product"))
+    subprocess.run(check=True, capture_output=True, args=[
+        buildscript_path, "--datastream-only", product], cwd=cac_repo)
 
 
 def get_opencontrol_content(workspace):
@@ -158,11 +274,6 @@ def get_profile_root(pinfo, content_path):
     return os.path.join(content_path, pname, proot)
 
 
-def find_moderate_profiles(proot):
-    raw_profiles = sh.find(proot, "-name", "*moderate*")
-    return raw_profiles.rstrip().split("\n")
-
-
 def try_getting_parsed_selection(sel, name):
     try:
         selinfo = yaml.safe_load(sel)
@@ -216,31 +327,82 @@ def get_applicable_references(selection, pname):
     return output
 
 
-def print_stats(product_info, fedramp_controls, content_path, output_file):
+def parse_rules_from_xccdf(baseline, ds_path):
+    rules = XCCDFBenchmark(ds_path).get_rules(baseline)
+    xccdf_rules = []
+    for rule in rules:
+        rprop = RuleProperties(baseline).from_element(rule)
+        if rprop is None:
+            continue
+        xccdf_rules.append(rprop)
+    return xccdf_rules
+
+
+def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
     """ Print the relevant statistics on how the controls are covered for a certain
     product """
     proot = get_profile_root(product_info, content_path)
-    profilespaths = find_moderate_profiles(proot)
 
-    addressed_controls = set()
+    xccdf_addressed_controls = set()
 
-    logging.info("Parsing selections...")
-    for selection in iterate_selections(profilespaths, product_info, content_path):
-        refs = get_applicable_references(selection, product_info["product"])
-        addressed_controls.update(refs)
+    rules_by_ref = dict()
+    rules_missing_fix = list()
+    rules_missing_oval = list()
+    rules_missing_ocil = list()
+    all_rule_names = list()
+    for xrule in xccdf_rules:
+        for ref in xrule.nistrefs:
+            if ref in rules_by_ref.keys():
+                rules_by_ref[ref].append(xrule)
+            else:
+                rules_by_ref[ref] = [xrule]
 
+        xccdf_addressed_controls.update(xrule.nistrefs)
+        all_rule_names.append(xrule.name)
+        if xrule.has_fix == False:
+            rules_missing_fix.append(xrule.name)
+        if xrule.has_oval == False:
+            rules_missing_oval.append(xrule.name)
+        if xrule.has_ocil == False:
+            rules_missing_ocil.append(xrule.name)
 
     print("\nStatistics summary:\n")
 
     total = len(fedramp_controls)
-    addressed = addressed_controls.intersection(fedramp_controls)
+    addressed = xccdf_addressed_controls.intersection(fedramp_controls)
     print("Addressed controls: %s/%s\n\t%s\n" % (len(addressed), total, ', '.join(addressed)))
 
-    diff = addressed_controls.difference(fedramp_controls)
+    xccdf_addressed = xccdf_addressed_controls.intersection(fedramp_controls)
+    print("Addressed controls in XCCDF: %s/%s\n\t%s\n" % (len(xccdf_addressed), total, ', '.join(xccdf_addressed)))
+
+    diff = xccdf_addressed_controls.difference(fedramp_controls)
     print("Controls addressed, not applicable to this baseline: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
 
     unaddressed = fedramp_controls.difference(addressed)
     print("Unaddressed controls: %s/%s\n\t%s\n" % (len(unaddressed), total, ', '.join(unaddressed)))
+
+    print("Rules per control:")
+    for ctrl, rules in rules_by_ref.items():
+        print("\t", ctrl)
+        for rule in rules:
+            print("\t\t - ", str(rule)) # TODO: Summary with rule properties as bits
+        print("")
+
+    print("Rule completeness stats")
+    print("\tRules mising remediation")
+    for r in rules_missing_fix:
+        print("\t\t -", r)
+    print("")
+
+    print("\tRules mising oval")
+    for r in rules_missing_oval:
+        print("\t\t -", r)
+    print("")
+
+    print("\tRules mising ocil")
+    for r in rules_missing_ocil:
+        print("\t\t -", r)
+    print("")
 
 
 def main():
@@ -260,17 +422,24 @@ def main():
     parser.add_argument('--product',
                         default='rhcos4',
                         help="The product that's being evaluated.")
+    parser.add_argument('--no-rebuild',
+                        dest='rebuild',
+                        action='store_false',
+                        help='Do not rebuild the content in CaC checkout (default: rebuild)')
     args = parser.parse_args()
 
     workspace = ensure_cachedir()
     fedramp_path = get_fedramp_sheet(workspace)
     fedramp_controls = get_fedramp_controls(fedramp_path, args.baseline)
     content_path = get_compliance_content(workspace)
+
     oc_path = get_opencontrol_content(workspace)
     #print_files_for_controls(fedramp_controls, content_path, args.file)
     product_info = get_product_info(args.product, content_path)
     fedramp_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
-    print_stats(product_info, fedramp_controls, content_path, args.file)
+    ds_path = get_ds_path(content_path, args.product, args.rebuild)
+    xccdf_rules = parse_rules_from_xccdf(args.baseline, ds_path)
+    print_stats(product_info, fedramp_controls, content_path, xccdf_rules)
 
 if __name__ == '__main__':
     logging.getLogger("sh").setLevel(logging.WARNING)
