@@ -420,7 +420,7 @@ def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
     diff = xccdf_addressed_controls.difference(fedramp_controls)
     print("Controls addressed, not applicable to this baseline: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
 
-    unaddressed = fedramp_controls.difference(addressed)
+    unaddressed = sorted(fedramp_controls.difference(addressed))
     print("Unaddressed controls: %s/%s\n\t%s\n" % (len(unaddressed), total, ', '.join(unaddressed)))
 
     print("Rules per control:")
