@@ -80,8 +80,9 @@ class XCCDFBenchmark:
         return rules
 
 class RuleProperties:
-    def __init__(self, profile_name):
+    def __init__(self, profile_name, repo_path):
         self.profile_name = profile_name
+        self.repo_path = repo_path
 
         self.rule_id = None
         self.name = None
@@ -89,6 +90,7 @@ class RuleProperties:
         self.has_fix = False
         self.has_ocil = False
         self.has_oval = False
+        self.has_e2etest = False
 
         self.nistrefs = list()
 
@@ -119,6 +121,25 @@ class RuleProperties:
         has_kubernetes_fix = False if kubernetes_fix is None else True
         self.has_fix = has_ignition_fix or has_kubernetes_fix
         return self
+
+    def _get_rule_path(self):
+        cmd = ["find", self.repo_path, "-name", self.name, "-type", "d"]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, universal_newlines=True)
+        if process.returncode != 0:
+            print("WARNING: Rule path not found for rule: %s" % self.name)
+            return None
+        return process.stdout.strip("\n")
+
+    def has_test(self):
+        if self.repo_path is None:
+            return
+        path = self._get_rule_path()
+        if path is None:
+            return
+        e2etestpath = os.path.join(path, "tests", "ocp4", "e2e.yml")
+        if os.path.isfile(e2etestpath):
+            self.has_e2etest = True
+
 
 
 def ensure_cachedir():
@@ -327,15 +348,33 @@ def get_applicable_references(selection, pname):
     return output
 
 
-def parse_rules_from_xccdf(baseline, ds_path):
+def parse_rules_from_xccdf(baseline, repo_path, ds_path):
     rules = XCCDFBenchmark(ds_path).get_rules(baseline)
     xccdf_rules = []
     for rule in rules:
-        rprop = RuleProperties(baseline).from_element(rule)
+        rprop = RuleProperties(baseline, repo_path).from_element(rule)
         if rprop is None:
             continue
+        rprop.has_test()
         xccdf_rules.append(rprop)
     return xccdf_rules
+
+
+def stat_percentage(sub_i, total_i):
+    sub = len(sub_i)
+    total = len(total_i)
+    if total == 0:
+        percent = 0
+    else:
+        percent = 100.0 * (sub/total)
+    return " %d/%d (%.2f%%)" % (sub, total, percent)
+
+
+def print_stat_block(title, sub_i, total_i):
+    print("\t" + title + " " + stat_percentage(sub_i, total_i))
+    for i in sub_i:
+        print("\t\t -", i)
+    print("")
 
 
 def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
@@ -349,6 +388,7 @@ def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
     rules_missing_fix = list()
     rules_missing_oval = list()
     rules_missing_ocil = list()
+    rules_missing_test = list()
     all_rule_names = list()
     for xrule in xccdf_rules:
         for ref in xrule.nistrefs:
@@ -365,6 +405,8 @@ def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
             rules_missing_oval.append(xrule.name)
         if xrule.has_ocil == False:
             rules_missing_ocil.append(xrule.name)
+        if xrule.has_e2etest == False:
+            rules_missing_test.append(xrule.name)
 
     print("\nStatistics summary:\n")
 
@@ -389,20 +431,10 @@ def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
         print("")
 
     print("Rule completeness stats")
-    print("\tRules mising remediation")
-    for r in rules_missing_fix:
-        print("\t\t -", r)
-    print("")
-
-    print("\tRules mising oval")
-    for r in rules_missing_oval:
-        print("\t\t -", r)
-    print("")
-
-    print("\tRules mising ocil")
-    for r in rules_missing_ocil:
-        print("\t\t -", r)
-    print("")
+    print_stat_block("Rules missing remediation", rules_missing_fix, xccdf_rules)
+    print_stat_block("Rules missing oval", rules_missing_oval, xccdf_rules)
+    print_stat_block("Rules missing ocil", rules_missing_ocil, xccdf_rules)
+    print_stat_block("Rules missing tests", rules_missing_test, xccdf_rules)
 
 
 def main():
@@ -438,7 +470,7 @@ def main():
     product_info = get_product_info(args.product, content_path)
     fedramp_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
     ds_path = get_ds_path(content_path, args.product, args.rebuild)
-    xccdf_rules = parse_rules_from_xccdf(args.baseline, ds_path)
+    xccdf_rules = parse_rules_from_xccdf(args.baseline, content_path, ds_path)
     print_stats(product_info, fedramp_controls, content_path, xccdf_rules)
 
 if __name__ == '__main__':
