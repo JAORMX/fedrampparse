@@ -225,7 +225,7 @@ def get_fedramp_controls(fedramp_path, baseline):
     # The first line doesn't contain the right titles... e.g. "Unnamed: 3"
     # after getting the title, the next line contains the actual titles... so
     # we skip it. The rest should be the actual list of controls.
-    controls = set(map(normalize_control, df1['Unnamed: 3'][1:]))
+    controls = set((normalize_control(x) for x in df1['Unnamed: 3'][1:] if isinstance(x, str)))
     logging.info("We'll check against %s FedRAMP controls", len(controls))
     return controls
 
