@@ -34,6 +34,7 @@ XCCDF_PROFILE_PREFIX = "xccdf_org.ssgproject.content_profile_"
 
 logging.basicConfig(level=logging.INFO)
 subsectionsre = re.compile(".*([a-z])")
+meetsre = re.compile(".*inherently me.*", re.IGNORECASE)
 
 def removeprefix(fullstr, prefix):
     if fullstr.startswith(prefix):
@@ -238,6 +239,11 @@ def iterate_components(proddir):
 
 
 def filter_fedramp_controls(product, controls, opencontrol_path):
+    """ Filters applicable FedRAMP controls.
+
+    It'll return a set of the controls that need addressed as well as a
+    subset of the inherently met ones.
+    """
     # Maps the CaC names to opencontrol names
     product_mapping = {
         "rhcos4": "coreos-4",
@@ -252,13 +258,20 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
 
     assessed_controls = set()
     unapplicable_controls = set()
+    met_controls = set()
     proddir = os.path.join(opencontrol_path, product_mapping[product], "policies")
     for component in iterate_components(proddir):
         for control in component:
-            assessed_controls.add(normalize_control(control["control_key"]))
+            nctrl = normalize_control(control["control_key"])
+            assessed_controls.add(nctrl)
 
             if control["implementation_status"] == "not applicable":
-                unapplicable_controls.add(normalize_control(control["control_key"]))
+                unapplicable_controls.add(nctrl)
+
+            if control["implementation_status"] == "complete":
+                for narrative in control["narrative"]:
+                    if meetsre.match(narrative["text"]):
+                        met_controls.add(nctrl)
 
     unassessed_controls = controls.difference(assessed_controls)
     if len(unassessed_controls) > 1:
@@ -268,7 +281,7 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
         logging.info("All FedRAMP controls were assessed in OpenControl")
 
     # Return applicable controls coming from the baseline itself
-    return controls.difference(unapplicable_controls)
+    return (controls.difference(unapplicable_controls), met_controls)
 
 
 def print_files_for_controls(fedramp_controls, content_path, output_file):
@@ -377,7 +390,7 @@ def print_stat_block(title, sub_i, total_i):
     print("")
 
 
-def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
+def print_stats(product_info, fedramp_controls, imet_controls, content_path, xccdf_rules):
     """ Print the relevant statistics on how the controls are covered for a certain
     product """
     proot = get_profile_root(product_info, content_path)
@@ -411,13 +424,17 @@ def print_stats(product_info, fedramp_controls, content_path, xccdf_rules):
     print("\nStatistics summary:\n")
 
     total = len(fedramp_controls)
-    addressed = xccdf_addressed_controls.intersection(fedramp_controls)
+    met_controls = xccdf_addressed_controls | imet_controls
+    addressed = met_controls.intersection(fedramp_controls)
     print("Addressed controls: %s/%s\n\t%s\n" % (len(addressed), total, ', '.join(addressed)))
 
     xccdf_addressed = xccdf_addressed_controls.intersection(fedramp_controls)
     print("Addressed controls in XCCDF: %s/%s\n\t%s\n" % (len(xccdf_addressed), total, ', '.join(xccdf_addressed)))
 
-    diff = xccdf_addressed_controls.difference(fedramp_controls)
+    inherently_met = imet_controls.intersection(fedramp_controls)
+    print("Inherently met: %s/%s\n\t%s\n" % (len(inherently_met), total, ', '.join(inherently_met)))
+
+    diff = met_controls.difference(fedramp_controls)
     print("Controls addressed, not applicable to this baseline: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
 
     unaddressed = sorted(fedramp_controls.difference(addressed))
@@ -468,10 +485,10 @@ def main():
     oc_path = get_opencontrol_content(workspace)
     #print_files_for_controls(fedramp_controls, content_path, args.file)
     product_info = get_product_info(args.product, content_path)
-    fedramp_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
+    fedramp_controls, imet_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
     ds_path = get_ds_path(content_path, args.product, args.rebuild)
     xccdf_rules = parse_rules_from_xccdf(args.baseline, content_path, ds_path)
-    print_stats(product_info, fedramp_controls, content_path, xccdf_rules)
+    print_stats(product_info, fedramp_controls, imet_controls, content_path, xccdf_rules)
 
 if __name__ == '__main__':
     logging.getLogger("sh").setLevel(logging.WARNING)
