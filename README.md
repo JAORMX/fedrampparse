@@ -23,6 +23,8 @@ source .venv/bin/activate
 # Install the dependencies
 pip install -r requirements.txt
 
+Note that the `jira` dependency is optional, but useful.
+
 # See the different options
 ./fedrampread.py -h
 

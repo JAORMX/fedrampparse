@@ -4,6 +4,7 @@ This small utility parses all the FedRAMP controls and displays the
 compliance as code content rules that apply to those controls.
 """
 import argparse
+import collections
 import os
 import logging
 import re
@@ -16,6 +17,12 @@ import requests
 import sh
 import yaml
 from xml.etree import ElementTree
+
+has_jira_bindings = True
+try:
+    import jira
+except ImportError:
+    has_jira_bindings = False
 
 
 FEDRAMP_SHEET = 'https://www.fedramp.gov/assets/resources/documents/FedRAMP_Security_Controls_Baseline.xlsx'
@@ -32,9 +39,12 @@ NIST_800_53_REFERENCE = "http://nvlpubs.nist.gov/nistpubs/SpecialPublications/NI
 XCCDF_RULE_PREFIX = "xccdf_org.ssgproject.content_rule_"
 XCCDF_PROFILE_PREFIX = "xccdf_org.ssgproject.content_profile_"
 
+JIRA_URL = "https://issues.redhat.com"
+
 logging.basicConfig(level=logging.INFO)
 subsectionsre = re.compile(".*([a-z])")
 meetsre = re.compile(".*inherently me.*", re.IGNORECASE)
+jira_issue_re = re.compile('\[.*\]:')
 
 def removeprefix(fullstr, prefix):
     if fullstr.startswith(prefix):
@@ -141,6 +151,48 @@ class RuleProperties:
         if os.path.isfile(e2etestpath):
             self.has_e2etest = True
 
+
+def jira_login(url, username, password_env):
+    if has_jira_bindings == False:
+        return None
+    password = os.getenv(password_env)
+
+    options = dict()
+    options['server'] = 'https://issues.redhat.com'
+    conn = jira.JIRA(options, basic_auth=(username, password))
+    os.unsetenv(password_env)
+    return conn
+
+
+def planned_controls_from_jira_epic(jira_conn, epic):
+    if jira_conn == False or epic == "":
+        return []
+
+    jql = "key = {epic} OR \"Epic Link\" = {epic}".format(epic=epic)
+    issues = jira_conn.search_issues(jql)
+
+    controls_to_jira = collections.defaultdict(list)
+    for i in issues:
+        # Don't report finished issues as in progress
+        if i.fields.status.name == 'Done':
+            continue
+
+        update_control_to_jira_mapping(controls_to_jira, i)
+
+    return controls_to_jira
+
+
+def update_control_to_jira_mapping(controls_mapping, issue):
+    controls = controls_from_jira(issue.fields.summary)
+    for c in controls:
+        controls_mapping[c.strip()].append(issue)
+
+
+def controls_from_jira(summary):
+    m = jira_issue_re.match(summary)
+    if m is None:
+        return []
+    return summary[m.start()+1:m.end()-2].split(',')
 
 
 def ensure_cachedir():
@@ -390,7 +442,7 @@ def print_stat_block(title, sub_i, total_i):
     print("")
 
 
-def print_stats(product_info, fedramp_controls, imet_controls, content_path, xccdf_rules):
+def print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules):
     """ Print the relevant statistics on how the controls are covered for a certain
     product """
     proot = get_profile_root(product_info, content_path)
@@ -437,14 +489,26 @@ def print_stats(product_info, fedramp_controls, imet_controls, content_path, xcc
     diff = met_controls.difference(fedramp_controls)
     print("Controls addressed, not applicable to this baseline: %s/%s\n\t%s\n" % (len(diff), total, ', '.join(diff)))
 
+    print("Planned controls: %s/%s\n\t%s\n" % (len(planned_controls), total, ', '.join(planned_controls)))
+
     unaddressed = sorted(fedramp_controls.difference(addressed))
     print("Unaddressed controls: %s/%s\n\t%s\n" % (len(unaddressed), total, ', '.join(unaddressed)))
+
+    unplanned = sorted(set(unaddressed).difference(planned_controls))
+    print("Unplanned controls: %s/%s\n\t%s\n" % (len(unplanned), total, ', '.join(unplanned)))
 
     print("Rules per control:")
     for ctrl, rules in rules_by_ref.items():
         print("\t", ctrl)
         for rule in rules:
             print("\t\t - ", str(rule)) # TODO: Summary with rule properties as bits
+        print("")
+
+    print("Planned per control:")
+    for ctrl, issues in planned_controls.items():
+        print("\t", ctrl)
+        for i in issues:
+            print("\t\t - https://issues.redhat.com/browse/%s - %s" % (str(i.key), i.fields.summary))
         print("")
 
     print("Rule completeness stats")
@@ -475,7 +539,17 @@ def main():
                         dest='rebuild',
                         action='store_false',
                         help='Do not rebuild the content in CaC checkout (default: rebuild)')
+    parser.add_argument('--jira-username',
+                        help="The usename to log to Jira with")
+    parser.add_argument('--jira-epic',
+                        help="The Jira epic for this work")
+    parser.add_argument('--jira-password-env',
+                        help="The environment variable that contains the Jira password")
     args = parser.parse_args()
+
+    jira_conn = None
+    if args.jira_username and args.jira_password_env:
+        jira_conn = jira_login(JIRA_URL, args.jira_username, args.jira_password_env)
 
     workspace = ensure_cachedir()
     fedramp_path = get_fedramp_sheet(workspace)
@@ -488,7 +562,8 @@ def main():
     fedramp_controls, imet_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
     ds_path = get_ds_path(content_path, args.product, args.rebuild)
     xccdf_rules = parse_rules_from_xccdf(args.baseline, content_path, ds_path)
-    print_stats(product_info, fedramp_controls, imet_controls, content_path, xccdf_rules)
+    planned_controls = planned_controls_from_jira_epic(jira_conn, args.jira_epic)
+    print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules)
 
 if __name__ == '__main__':
     logging.getLogger("sh").setLevel(logging.WARNING)
