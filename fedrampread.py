@@ -322,7 +322,7 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
 
             if control["implementation_status"] == "complete":
                 for narrative in control["narrative"]:
-                    if meetsre.match(narrative["text"]):
+                    if meetsre.search(narrative["text"]):
                         met_controls.add(nctrl)
 
     unassessed_controls = controls.difference(assessed_controls)
