@@ -569,8 +569,8 @@ def print_json(product_info, baseline, fedramp_controls, planned_controls, imet_
     data["addressed_controls"]["inherently"] = imet_controls.intersection(fedramp_controls)
     data["addressed_controls"]["not applicable"] = met_controls.difference(fedramp_controls)
     data["planned"] = planned_controls
-    data["unadressed"] = sorted(fedramp_controls.difference(data["addressed_controls"]["all"]))
-    data["unplanned"] = sorted(set(data["unadressed"]).difference(planned_controls))
+    data["unaddressed"] = sorted(fedramp_controls.difference(data["addressed_controls"]["all"]))
+    data["unplanned"] = sorted(set(data["unaddressed"]).difference(planned_controls))
 
     print(json.dumps(data, cls=setEncoder), file=output_file)
 
