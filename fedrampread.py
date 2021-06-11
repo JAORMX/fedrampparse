@@ -16,6 +16,7 @@ import pandas as pd
 import requests
 import sh
 import yaml
+import json
 from xml.etree import ElementTree
 
 has_jira_bindings = True
@@ -150,6 +151,11 @@ class RuleProperties:
         e2etestpath = os.path.join(path, "tests", "ocp4", "e2e.yml")
         if os.path.isfile(e2etestpath):
             self.has_e2etest = True
+
+# subclass JSONEncoder
+class setEncoder(json.JSONEncoder):
+        def default(self, obj):
+            return list(obj)
 
 
 def jira_login(url, username, password_env):
@@ -517,6 +523,56 @@ def print_stats(product_info, fedramp_controls, planned_controls, imet_controls,
     print_stat_block("Rules missing ocil", rules_missing_ocil, xccdf_rules)
     print_stat_block("Rules missing tests", rules_missing_test, xccdf_rules)
 
+def print_json(product_info, baseline, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules, output_file):
+    """ Print the relevant statistics on how the controls are covered for a certain
+    product in JSON format"""
+    proot = get_profile_root(product_info, content_path)
+
+    xccdf_addressed_controls = set()
+
+    rules_by_ref = dict()
+    rules_missing_fix = list()
+    rules_missing_oval = list()
+    rules_missing_ocil = list()
+    rules_missing_test = list()
+    all_rule_names = list()
+    for xrule in xccdf_rules:
+        for ref in xrule.nistrefs:
+            if ref in rules_by_ref.keys():
+                rules_by_ref[ref].append(xrule)
+            else:
+                rules_by_ref[ref] = [xrule]
+
+        xccdf_addressed_controls.update(xrule.nistrefs)
+        all_rule_names.append(xrule.name)
+        if xrule.has_fix == False:
+            rules_missing_fix.append(xrule.name)
+        if xrule.has_oval == False:
+            rules_missing_oval.append(xrule.name)
+        if xrule.has_ocil == False:
+            rules_missing_ocil.append(xrule.name)
+        if xrule.has_e2etest == False:
+            rules_missing_test.append(xrule.name)
+
+    data = dict()
+    data["format_version"] = "v0.0.1"
+    data["product_name"] = product_info["product"]
+    data["benchmark"] = dict()
+    data["benchmark"]["name"] = "FedRAMP"
+    data["benchmark"]["baseline"] = baseline
+    data["total_controls"] = len(fedramp_controls)
+
+    met_controls = xccdf_addressed_controls | imet_controls
+    data["addressed_controls"] = dict()
+    data["addressed_controls"]["all"] = met_controls.intersection(fedramp_controls)
+    data["addressed_controls"]["xccdf"] = xccdf_addressed_controls.intersection(fedramp_controls)
+    data["addressed_controls"]["inherently"] = imet_controls.intersection(fedramp_controls)
+    data["addressed_controls"]["not applicable"] = met_controls.difference(fedramp_controls)
+    data["planned"] = planned_controls
+    data["unadressed"] = sorted(fedramp_controls.difference(data["addressed_controls"]["all"]))
+    data["unplanned"] = sorted(set(data["unadressed"]).difference(planned_controls))
+
+    print(json.dumps(data, cls=setEncoder), file=output_file)
 
 def main():
     """ read the fedramp controls! """
@@ -535,6 +591,10 @@ def main():
     parser.add_argument('--product',
                         default='rhcos4',
                         help="The product that's being evaluated.")
+    parser.add_argument('--output',
+                        default='orig',
+                        choices=['orig', 'json'],
+                        help="The output format.")
     parser.add_argument('--no-rebuild',
                         dest='rebuild',
                         action='store_false',
@@ -563,7 +623,10 @@ def main():
     ds_path = get_ds_path(content_path, args.product, args.rebuild)
     xccdf_rules = parse_rules_from_xccdf(args.baseline, content_path, ds_path)
     planned_controls = planned_controls_from_jira_epic(jira_conn, args.jira_epic)
-    print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules)
+    if args.output == "orig":
+        print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules)
+    else:
+        print_json(product_info, args.baseline, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules, args.file)
 
 if __name__ == '__main__':
     logging.getLogger("sh").setLevel(logging.WARNING)
