@@ -403,7 +403,7 @@ def iterate_selections(ppaths, pinfo, content_path):
 
 def get_product_info(product, content_path):
     """ Parses the product description """
-    product_info_file = os.path.join(content_path, product, "product.yml")
+    product_info_file = os.path.join(content_path, "products", product, "product.yml")
     with open(product_info_file) as fil:
         info = yaml.load(fil, Loader=yaml.BaseLoader)
         return info
