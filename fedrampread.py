@@ -165,8 +165,8 @@ def jira_login(url, username, password_env):
 
 
 def planned_controls_from_jira_epic(jira_conn, epic):
-    if jira_conn == False or epic == "":
-        return []
+    if jira_conn == None or epic == "":
+        return dict()
 
     jql = "key = {epic} OR \"Epic Link\" = {epic}".format(epic=epic)
     issues = jira_conn.search_issues(jql)
