@@ -45,6 +45,7 @@ JIRA_URL = "https://issues.redhat.com"
 logging.basicConfig(level=logging.INFO)
 subsectionsre = re.compile(".*([a-z])")
 meetsre = re.compile(".*inherently me.*", re.IGNORECASE)
+docsre = re.compile(".*addressed.*documentation.*", re.IGNORECASE)
 jira_issue_re = re.compile('\[.*\]:')
 
 def removeprefix(fullstr, prefix):
@@ -317,6 +318,7 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
     assessed_controls = set()
     unapplicable_controls = set()
     met_controls = set()
+    docs_controls = set()
     proddir = os.path.join(opencontrol_path, product_mapping[product], "policies")
     for component in iterate_components(proddir):
         for control in component:
@@ -330,6 +332,8 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
                 for narrative in control["narrative"]:
                     if meetsre.search(narrative["text"]):
                         met_controls.add(nctrl)
+                    if docsre.search(narrative["text"]):
+                        docs_controls.add(nctrl)
 
     unassessed_controls = controls.difference(assessed_controls)
     if len(unassessed_controls) > 1:
@@ -339,7 +343,7 @@ def filter_fedramp_controls(product, controls, opencontrol_path):
         logging.info("All FedRAMP controls were assessed in OpenControl")
 
     # Return applicable controls coming from the baseline itself
-    return (controls.difference(unapplicable_controls), met_controls)
+    return (controls.difference(unapplicable_controls), met_controls, docs_controls)
 
 
 def print_files_for_controls(fedramp_controls, content_path, output_file):
@@ -448,7 +452,7 @@ def print_stat_block(title, sub_i, total_i):
     print("")
 
 
-def print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules):
+def print_stats(product_info, fedramp_controls, planned_controls, imet_controls, docs_controls, content_path, xccdf_rules):
     """ Print the relevant statistics on how the controls are covered for a certain
     product """
     proot = get_profile_root(product_info, content_path)
@@ -483,11 +487,15 @@ def print_stats(product_info, fedramp_controls, planned_controls, imet_controls,
 
     total = len(fedramp_controls)
     met_controls = xccdf_addressed_controls | imet_controls
+    met_controls = met_controls | docs_controls
     addressed = met_controls.intersection(fedramp_controls)
     print("Addressed controls: %s/%s\n\t%s\n" % (len(addressed), total, ', '.join(addressed)))
 
     xccdf_addressed = xccdf_addressed_controls.intersection(fedramp_controls)
     print("Addressed controls in XCCDF: %s/%s\n\t%s\n" % (len(xccdf_addressed), total, ', '.join(xccdf_addressed)))
+
+    docs_met = docs_controls.intersection(fedramp_controls)
+    print("Met via documentation: %s/%s\n\t%s\n" % (len(docs_met), total, ', '.join(docs_met)))
 
     inherently_met = imet_controls.intersection(fedramp_controls)
     print("Inherently met: %s/%s\n\t%s\n" % (len(inherently_met), total, ', '.join(inherently_met)))
@@ -523,7 +531,7 @@ def print_stats(product_info, fedramp_controls, planned_controls, imet_controls,
     print_stat_block("Rules missing ocil", rules_missing_ocil, xccdf_rules)
     print_stat_block("Rules missing tests", rules_missing_test, xccdf_rules)
 
-def print_json(product_info, baseline, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules, output_file):
+def print_json(product_info, baseline, fedramp_controls, planned_controls, imet_controls, docs_controls, content_path, xccdf_rules, output_file):
     """ Print the relevant statistics on how the controls are covered for a certain
     product in JSON format"""
     proot = get_profile_root(product_info, content_path)
@@ -562,11 +570,12 @@ def print_json(product_info, baseline, fedramp_controls, planned_controls, imet_
     data["benchmark"]["baseline"] = baseline
     data["total_controls"] = len(fedramp_controls)
 
-    met_controls = xccdf_addressed_controls | imet_controls
+    met_controls = xccdf_addressed_controls | imet_controls | docs_controls
     data["addressed_controls"] = dict()
     data["addressed_controls"]["all"] = met_controls.intersection(fedramp_controls)
     data["addressed_controls"]["xccdf"] = xccdf_addressed_controls.intersection(fedramp_controls)
     data["addressed_controls"]["inherently"] = imet_controls.intersection(fedramp_controls)
+    data["addressed_controls"]["docs"] = docs_controls.intersection(fedramp_controls)
     data["addressed_controls"]["not applicable"] = met_controls.difference(fedramp_controls)
     data["planned"] = planned_controls
     data["unaddressed"] = sorted(fedramp_controls.difference(data["addressed_controls"]["all"]))
@@ -619,14 +628,14 @@ def main():
     oc_path = get_opencontrol_content(workspace)
     #print_files_for_controls(fedramp_controls, content_path, args.file)
     product_info = get_product_info(args.product, content_path)
-    fedramp_controls, imet_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
+    fedramp_controls, imet_controls, docs_controls = filter_fedramp_controls(args.product, fedramp_controls, oc_path)
     ds_path = get_ds_path(content_path, args.product, args.rebuild)
     xccdf_rules = parse_rules_from_xccdf(args.baseline, content_path, ds_path)
     planned_controls = planned_controls_from_jira_epic(jira_conn, args.jira_epic)
     if args.output == "orig":
-        print_stats(product_info, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules)
+        print_stats(product_info, fedramp_controls, planned_controls, imet_controls, docs_controls, content_path, xccdf_rules)
     else:
-        print_json(product_info, args.baseline, fedramp_controls, planned_controls, imet_controls, content_path, xccdf_rules, args.file)
+        print_json(product_info, args.baseline, fedramp_controls, planned_controls, imet_controls, docs_controls, content_path, xccdf_rules, args.file)
 
 if __name__ == '__main__':
     logging.getLogger("sh").setLevel(logging.WARNING)
