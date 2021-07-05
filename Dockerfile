@@ -8,6 +8,7 @@ RUN microdnf install -y python \
     python3-requests \
     python3-sh \
     python3-xlrd \
+    python3-openpyxl \
     kubernetes-client
 
 # https://bugzilla.redhat.com/show_bug.cgi?id=1903219
