@@ -202,8 +202,9 @@ def controls_from_jira(summary):
     return summary[m.start()+1:m.end()-2].split(',')
 
 
-def ensure_cachedir():
-    directory = ".fedrampcachedir"
+def ensure_cachedir(dirbase):
+    cachedir = ".fedrampcachedir"
+    directory = os.path.join(dirbase, cachedir)
     try:
         os.stat(directory)
     except FileNotFoundError:
@@ -614,13 +615,16 @@ def main():
                         help="The Jira epic for this work")
     parser.add_argument('--jira-password-env',
                         help="The environment variable that contains the Jira password")
+    parser.add_argument('--cachedir',
+                        default="./",
+                        help='The directory to store the cache to.')
     args = parser.parse_args()
 
     jira_conn = None
     if args.jira_username and args.jira_password_env:
         jira_conn = jira_login(JIRA_URL, args.jira_username, args.jira_password_env)
 
-    workspace = ensure_cachedir()
+    workspace = ensure_cachedir(args.cachedir)
     fedramp_path = get_fedramp_sheet(workspace)
     fedramp_controls = get_fedramp_controls(fedramp_path, args.baseline)
     content_path = get_compliance_content(workspace)

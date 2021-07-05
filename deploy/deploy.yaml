@@ -61,7 +61,7 @@ spec:
                 - |-
                   set -eux;
                   date;
-                  ./fedrampread.py --product=ocp4 --jira-username=jhrozek.jirabot --jira-password-env=JIRA_PASS --jira-epic=CMP-888 --output json /cache/moderate.json;
+                  /usr/bin/fedrampread.py --product=ocp4 --jira-username=jhrozek.jirabot --jira-password-env=JIRA_PASS --jira-epic=CMP-888 --output json /cache/moderate.json;
                   kubectl create configmap benchmark-data --from-file=moderate.json=/cache/moderate.json --dry-run=client -o yaml | kubectl apply -f -;
               volumeMounts:
                 - mountPath: /cache
