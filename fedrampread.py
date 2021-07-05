@@ -161,6 +161,7 @@ class setEncoder(json.JSONEncoder):
 
 def jira_login(url, username, password_env):
     if has_jira_bindings == False:
+        logging.warn("Please install python3-jira to enable fetching stats from Jira")
         return None
     password = os.getenv(password_env)
 
@@ -168,17 +169,23 @@ def jira_login(url, username, password_env):
     options['server'] = 'https://issues.redhat.com'
     conn = jira.JIRA(options, basic_auth=(username, password))
     os.unsetenv(password_env)
+    if conn == None:
+        logging.warn("Could not establish connection to Jira, check your password")
+    else:
+        logging.info("Established connection to Jira")
     return conn
 
 
 def planned_controls_from_jira_epic(jira_conn, epic):
     if jira_conn == None or epic == "":
+        logging.info("No connection or epic; skipping Jira statistics")
         return dict()
 
     jql = "key = {epic} OR \"Epic Link\" = {epic}".format(epic=epic)
     issues = jira_conn.search_issues(jql)
 
     controls_to_jira = collections.defaultdict(list)
+    logging.info("Fetched %d issues from Jira linked to %s" % (len(issues), epic))
     for i in issues:
         # Don't report finished issues as in progress
         if i.fields.status.name == 'Done':
