@@ -1,6 +1,7 @@
 FROM registry.fedoraproject.org/fedora-minimal:latest
 
 RUN microdnf install -y python \
+    tzdata \
     python3-GitPython \
     python3-numpy \
     python3-pandas \
