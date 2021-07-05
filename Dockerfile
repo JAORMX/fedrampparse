@@ -9,6 +9,7 @@ RUN microdnf install -y python \
     python3-sh \
     python3-xlrd \
     python3-openpyxl \
+    python3-jira \
     findutils \
     kubernetes-client
 
