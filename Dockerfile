@@ -7,7 +7,8 @@ RUN microdnf install -y python \
     python3-pyyaml \
     python3-requests \
     python3-sh \
-    python3-xlrd
+    python3-xlrd \
+    kubernetes-client
 
 COPY fedrampread.py fedrampread.py
 
