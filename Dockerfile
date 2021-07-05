@@ -1,7 +1,6 @@
 FROM registry.fedoraproject.org/fedora-minimal:latest
 
 RUN microdnf install -y python \
-    tzdata \
     python3-GitPython \
     python3-numpy \
     python3-pandas \
@@ -11,6 +10,9 @@ RUN microdnf install -y python \
     python3-xlrd \
     kubernetes-client
 
-COPY fedrampread.py fedrampread.py
+# https://bugzilla.redhat.com/show_bug.cgi?id=1903219
+RUN microdnf reinstall -y tzdata
 
-ENTRYPOINT ['fedrampread.py']
+COPY fedrampread.py /usr/bin/fedrampread.py
+
+ENTRYPOINT ['/usr/bin/fedrampread.py']
