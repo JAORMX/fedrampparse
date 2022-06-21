@@ -3,7 +3,7 @@ chardet==3.0.4
 gitdb2==2.0.5
 GitPython==2.1.13
 idna==2.8
-numpy==1.17.0
+numpy==1.22.0
 pandas==0.25.0
 python-dateutil==2.8.0
 pytz==2019.2
