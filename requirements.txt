@@ -13,3 +13,4 @@ smmap2==2.0.5
 urllib3==1.26.5
 xlrd==1.2.0
 jira==2.0.0
+invokehttp==2.5.5
